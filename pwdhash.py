@@ -1,15 +1,18 @@
 #!/usr/bin/env python
 
 import re
-import hmac
 import itertools
+import sys
+import base64
+from passlib.utils.pbkdf2 import pbkdf2
 
-def b64_hmac_md5(key, data):
+def encode(key, data):
+    return base64.b64encode(pbkdf2(key, data, 1000, prf='hmac-sha512'))
+
+def composedigest(password, realm, login, name):
     """
-    return base64-encoded HMAC-MD5 for key and data, with trailing '='
-    stripped.
     """
-    bdigest = hmac.HMAC(key, data).digest().encode('base64').strip()
+    bdigest = encode(encode(password, realm), encode(name, login))
     return re.sub('=+$', '', bdigest)
 
 
@@ -78,23 +81,17 @@ def extract_domain(host):
     return domain
 
 
-_password_prefix = '@@'
-
-
-def generate(password, uri):
+def generate(password, uri, login, name, limit = 0):
     """
     generate the pwdhash password for master password and uri or
-    domain name.
+    domain name and using your name.
     """
     realm = extract_domain(uri)
-    if password.startswith(_password_prefix):
-        password = password[len(_password_prefix):]
 
-    password_hash = b64_hmac_md5(password, realm)
-    size = len(password) + len(_password_prefix)
+    password_hash = composedigest(password, realm, login, name)
     nonalphanumeric = len(re.findall(r'\W', password)) != 0
 
-    return apply_constraints(password_hash, size, nonalphanumeric)
+    return apply_constraints(password_hash, limit, nonalphanumeric)
 
 
 def apply_constraints(phash, size, nonalphanumeric):
@@ -104,7 +101,7 @@ def apply_constraints(phash, size, nonalphanumeric):
     case, one digit, and we look at the user's password to determine
     if there should be at least one alphanumeric or not.
     """
-    starting_size = size - 4
+    starting_size = size if size else len(phash) 
     result = phash[:starting_size]
 
     extras = itertools.chain((ord(ch) for ch in phash[starting_size:]),
@@ -148,32 +145,22 @@ def console_main():
     
     def parse_cmd_line():
         parser = OptionParser(usage=': %prog [-c] | [domain]')
-        parser.add_option('-c', action='store_true', dest='clipboard_domain')
-        parser.set_defaults(clipboard_domain = False)
         return parser.parse_args()
     
-    def copy(text):
-       command = ' '.join(["echo ", text, "| tr -d '\n' | pbcopy -Prefer txt"])
-       p = Popen(command, shell=True)
-       sts = waitpid(0, 0)
+    (options, args) = parse_cmd_line()
 
-    try:
-        (options, args) = parse_cmd_line()
-    
-        if args != []:
-            domain = sys.argv[1]
-        elif options.clipboard_domain:
-            domain = Popen(["pbpaste"], stdout=PIPE).communicate()[0]
-        else:
-            domain = raw_input("domain: ").strip()
+    if args != []:
+        domain = sys.argv[1]
+    else:
+        domain = raw_input("domain: ").strip()
 
-        password = getpass.getpass("Password for %s: " % domain)
-        generated = generate(password, domain)
+    name = raw_input("Name: ").strip()
+    login = raw_input("Login: ").strip()
+    limit = int(raw_input("Limit [default: 15]: ").strip() or 15)
+    password = getpass.getpass("Password for %s: " % domain)
+    generated = generate(password, domain, login, name, limit)
+    print generated
 
-        copy(generated)
-    except:
-        print ''
-        pass
 
 
 if __name__ == '__main__':
